@@ -1,0 +1,3 @@
+# Manifest
+
+Generate disk manifests
