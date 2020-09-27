@@ -128,10 +128,146 @@ For now, we don't show any explicit error, and the 0000.. hash is a good stand-i
 expect to never see it. This will handle both "can't open" as well as I/O errors in read.
 A more robust version of this would show the errors in a side channel.
 
-Of course, it did not take 2 hours to do hashes for 4 TB worth of 4 million files, it
-took 8 hours. This is because opening and reading a small file is far less efficient
-in terms of disk bandwidth, and not due to the hashing itself - the Sha-1 hashing on the
-computer I'm using appears to be performing at about 4.5 GByte/second. Depending on the disk
-sub-system, issuing parallel requests can speed things up, because the underlying operating
-system can reorder and even coalesce read requests. But we're going to set that aside
-for now.
+Of course, it did not take 2 hours to do hashes for 4 TB worth of 4 million files, it took almost 8
+hours (Elapsed time: 28133.037 seconds) for this test. This is because opening and reading a small
+file is far less efficient in terms of disk bandwidth, and not due to the hashing itself - the Sha-1
+hashing on the computer I'm using appears to be performing at about 4.5 GByte/second. Depending on
+the disk sub-system, issuing parallel requests can speed things up, because the underlying operating
+system can reorder and even coalesce read requests. But we're going to set that aside for now.
+
+## Duplicate files and changed files
+
+Now that we have hashes for every single file, we can do a few things. We can look for
+duplicate files - two or more files on disk that contain the same content. Note that without
+doing a lot of work, we can't tell on Windows if these are hard links, whereas on a Unix-style
+system, we could simply see if the two files have the same inodes.
+
+But we can also look for files with the same leaf name that have different contents. If we
+assume that the leaf names are relatively unique (and they often are), this can show us files
+copied to different locations in the file system that have changed, for one reason or another.
+
+First, because we ran our 8-hour hash operation by redirecting output, we have a manifests
+file to read. Let's read it. We need a command-line option to get its name and an option to
+say what we're doing; the latter should be a verb, but for now we'll make it an option. And
+we'll also add an option for our original behavior
+
+```
+    parser.add_argument('--manifest', '-m', help='manifest file to use')
+    parser.add_argument('--find-dups', action='store_true', help='find files with the same hash')
+    parser.add_argument('--scan', help='compute hashes for the given paths')
+```
+
+and we need to read the manifest file; the file is a fixed-format at this point, so we can
+break it into its pieces easily enough. For now, we'll just read it into an array of arrrays,
+but if we get more complicated, we'll introduce a data structure.
+
+```
+manifest = None
+if args.manifest:
+    manifest = []
+    with open(args.manifest, 'r') as f:
+        for line in f:
+            manifest.append([line[:40], line[41:].rstrip()])
+```
+
+Once we have a manifest, we can find dups. We do this by creating a hash table (dict in Python)
+where the keys are the hashes and the values are the files containing those hashes.
+
+```
+hashes = dict()
+for entry in manifest:
+    hash, path = entry[0], entry[1]
+    if hash not in hashes:
+        hashes[hash] = []
+    hashes[hash].append(path)
+```
+
+Once we have the `hashes` dict, we can just iterate through it, looking for hashes with
+multiple files
+
+```
+for hash, paths in hashes.items():
+    if len(paths) > 1:
+        print(f"{hash}: {len(paths)} duplicates")
+        for path in paths:
+            print(f"    {path}")
+```
+
+## Side bar on character encodings
+
+Running this code on my Windows system gives me a nasty and familiar error
+
+```
+  File "C:\projects\github\neurocline\manifest\manifest.py", line 81, in <module>
+    main()
+  File "C:\projects\github\neurocline\manifest\manifest.py", line 17, in main
+    find_dups(args.manifest)
+  File "C:\projects\github\neurocline\manifest\manifest.py", line 51, in find_dups
+    manifest = read_manifest(manifest_path)
+  File "C:\projects\github\neurocline\manifest\manifest.py", line 75, in read_manifest
+    for line in f:
+  File "C:\Python37-64\lib\encodings\cp1252.py", line 23, in decode
+    return codecs.charmap_decode(input,self.errors,decoding_table)[0]
+UnicodeDecodeError: 'charmap' codec can't decode byte 0x8f in position 7079: character maps to <undefined>
+```
+
+This is because we originally created the file by redirecting Windows output, which
+almost certainly wrote a CP-1252 encoded file. This is a sad legacy of Windows that
+lives on to this day, and we're not going to deal with it here, just yet. We're going
+to paper over it by opening the file as cp-1252
+
+```
+    with open(args.manifest, 'r', encoding='cp1252') as f:
+```
+
+The real fix is to update the --scan code to write the manifest file out, instead of
+using redirected I/O, and at that point we have to decide how we are representing paths,
+because even there, we might not be able to translate the path on disk to a Unicode path
+(our preferred representation for strings). We will deal with this later.
+
+Of course, it's not that easy, we still get an exception. Since we don't know what line
+it failed on, let's instrument:
+
+```
+    with open(manifest_path, 'r', encoding='cp1252') as f:
+        linenum = 1
+        try:
+            for line in f:
+                manifest.append([line[:40], line[41:].rstrip()])
+                linenum += 1
+        except Exception as e:
+            print(f"Error in line {linenum}")
+            raise e
+```
+
+And we find out where
+
+```
+Reading manifest from cdef_digests.txt
+Error in line 2612141
+```
+
+But, also, since I ran from the Windows console and redirected output, what is my console
+set to?
+
+```
+C:\projects\github\neurocline\manifest>chcp
+Active code page: 437
+```
+
+This is not actually code page 1252, the Windows default code page; the console defaults
+to the code page for the original IBM PC, also now called DOS Latin US.
+
+For curiosity, what path was this? This is interesting, the path looks fine
+
+```
+D:\projects\unrealwiki\WikiPages\Unreal Engine Wiki\github.com\6gt50o\Unreal.js\commits\master.atom
+```
+
+(this is a path from the archived Unreal wiki that I had grabbed, before someone else put it up again)
+
+Even though the path looks fine, when we re-run using cp437, we can read the file properly. The error
+claims that we should see a Å in the file name. I don't see that, and neither cp1252 or cp437 are
+multi-byte character sets, so I'm not sure what is happening here.
+
+When we run this, we have a surprising number of duplicates.
