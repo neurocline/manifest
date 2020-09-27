@@ -27,11 +27,15 @@ def walk(base_path):
 def get_hash(file_path):
     import hashlib
     blocksize = 65536
+    null_digest = "0" * 40
     sha1 = hashlib.sha1()
-    with open(file_path, 'rb') as f:
-        for data in iter(lambda: f.read(blocksize), b''):
-            sha1.update(data)
-    print(f"{sha1.hexdigest()} {file_path}")
+    try:
+        with open(file_path, 'rb') as f:
+            for data in iter(lambda: f.read(blocksize), b''):
+                sha1.update(data)
+        print(f"{sha1.hexdigest()} {file_path}")
+    except:
+        print(f"{null_digest} {file_path}")
 
 if __name__ == '__main__':
     main()

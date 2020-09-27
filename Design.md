@@ -108,3 +108,30 @@ to play with, but not an issue for a tool you run every once in a while.
 
 Reading a 1 TB drive at 450 MB/sec will take about 2200 seconds, or 37 min. Doing this for
 about 4 TB of data will take 2 hours. Not great, not horrible.
+
+## Handling read errors
+
+Of course, just because we can get a path name doesn't mean we can open the file.
+But we can wrap the open in a try/except
+
+```
+null_digest = "0" * 40
+try:
+    with open(file_path, 'rb') as f:
+    ...
+except:
+    print(f"{null_digest} {file_path}")
+```
+
+For now, we don't show any explicit error, and the 0000.. hash is a good stand-in for
+"failed to read", because any specific SHA-1 hash is very unlikely, to the point where we can
+expect to never see it. This will handle both "can't open" as well as I/O errors in read.
+A more robust version of this would show the errors in a side channel.
+
+Of course, it did not take 2 hours to do hashes for 4 TB worth of 4 million files, it
+took 8 hours. This is because opening and reading a small file is far less efficient
+in terms of disk bandwidth, and not due to the hashing itself - the Sha-1 hashing on the
+computer I'm using appears to be performing at about 4.5 GByte/second. Depending on the disk
+sub-system, issuing parallel requests can speed things up, because the underlying operating
+system can reorder and even coalesce read requests. But we're going to set that aside
+for now.
