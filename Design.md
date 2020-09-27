@@ -271,3 +271,56 @@ claims that we should see a Å in the file name. I don't see that, and neither c
 multi-byte character sets, so I'm not sure what is happening here.
 
 When we run this, we have a surprising number of duplicates.
+
+## Analyzing duplicates
+
+When I run this on my system, I had a lot of duplicates. The duplicates file has 3 million
+entries in it. Now, given that a pair of files with the same hash will write three lines in
+the file, that means something like 1 million duplicate files. But out of 4 million, that's a
+surprising amount.
+
+Some of it is due to two special cases.
+
+The hash value `0000000000000000000000000000000000000000` is synthetic. We reported that when we had
+some kind of error preventing us from completely reading a file. In our case, it's very likely that
+none of these files could be opened, either from permissions, or that it was already opened in
+an exclusive mode (the various pagefiles). I had 735 of these, and most of them are indeed system
+files of one sort or another.
+
+The hash value `da39a3ee5e6b4b0d3255bfef95601890afd80709` is more interesting. This is the SHA-1
+has of zero bytes, e.g. an empty file.  I had 29417 of these scattered across my drives. These
+aren't duplicate files, of course, it's just that all empty files look the same.
+
+I had so many duplicate files for another reason - most of my drives at this moment are filled with
+Unreal builds of one sort or another, and evidently the number of repeated artifacts was much bigger
+than I had realized.
+
+So to make it easier to see, let's sort the output by number of occurences, in reverse
+
+```
+sorted_hashes = sorted(list(hashes), key=lambda e: len(hashes[e]), reverse=True)
+for hash in sorted_hashes:
+    ... print
+```
+
+Also, let's ignore empty files and the error files for now.
+
+Interestingly, I have a lot of files with the hash `a7d8d04b47f8f7a1decedd3d5a4ecf072a3e92e5`; 9971
+of them. And more interesting, these are relatively big, at 486 bytes. These are all Unreal build
+artifacts whos leaf name starts with `PHYSX_`. So presumably there is something going on here where
+lots of assets are referencing exactly the same data, but for some reason it's stored in unique files
+instead of all pointing to the same file. And while maybe the Unreal cook process converts all of these
+to the same blob, or maybe these aren't used, this could mean 4.3 MB of pointless data in a build.
+And this is one of the reasons why you look for duplicates; waste.
+
+There's a more traditionally interesting dup: 7984 copies of `acbaef275e46a7f14c1ef456fff2c8bbe8c84724`.
+This is because evidently I have that many Git repos on my system, because this is `.git\HEAD`, which
+is very often the string `ref: refs/heads/master`, because most repos are checked-out to the `master`
+branch (which will be the `main` branch from this point on, looks like).
+
+And there's more duplication on my drive related to Unreal. Unreal uses ICU, and there are 5511 duplicates
+of localized resources. More PhysX duplicate resources. Some generated files from Unreal that have no
+body, just the common header saying "this is a generated file". Apparently MathJax ships with 1456
+duplicate files, some empty-looking PNG. All in all, there's over 100,000 files on my system that aren't
+really duplicate files in a traditional sense, but files that have the same content for a variety of
+reasons.

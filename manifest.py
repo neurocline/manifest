@@ -59,11 +59,22 @@ def find_dups(manifest_path):
         hashes[hash].append(path)
 
     # show hashes with multiple paths
-    for hash, paths in hashes.items():
-        if len(paths) > 1:
-            print(f"{hash}: {len(paths)} duplicates")
-            for path in paths:
-                print(f"    {path}")
+    num_dups = 0
+    dup_files = 0
+    sorted_hashes = sorted(list(hashes), key=lambda e: len(hashes[e]), reverse=True)
+    for hash in sorted_hashes:
+        paths = hashes[hash]
+        if len(paths) < 2:
+            continue
+        if hash == 'da39a3ee5e6b4b0d3255bfef95601890afd80709' or hash == '0000000000000000000000000000000000000000':
+            continue
+        num_dups += 1
+        print(f"{hash}: {len(paths)} duplicates")
+        for path in paths:
+            print(f"    {path}")
+            dup_files += 1
+    print(f"{len(hashes)} unique files out of {len(manifest)} total files")
+    print(f"{num_dups} duplicated hashes found, {dup_files} duplicated files found")
 
 def read_manifest(manifest_path):
     import os.path
