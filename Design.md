@@ -324,3 +324,173 @@ body, just the common header saying "this is a generated file". Apparently MathJ
 duplicate files, some empty-looking PNG. All in all, there's over 100,000 files on my system that aren't
 really duplicate files in a traditional sense, but files that have the same content for a variety of
 reasons.
+
+## Adding file metadata
+
+In all of this, we have only been looking at two things - the file path (which includes the file leaf name,
+also often referred to as the base name), and the sha-1 hash of the file contents. We want at least
+file size as well, because often for duplicates we care about the larger duplicates more than the
+smaller ones.
+
+We spent 8 hours getting file hashes for all our files, and while it's now a little out of date (because
+we have been editing files in that very hierarchy), it's still a useful set of data. So we want to
+annotate it with file sizes, and not re-compute hashes.
+
+We can do this by reading the existing manifest, then running a scan on it to add filesize metadata,
+and then writing it back out. We're also going to do a one-time transition from cp437 to utf-8.
+
+Read the manifest in, but this time read it into a type, not just an array. And when we
+write it out, we're going to write a file version, so we can update the data down the road.
+
+```
+from collections import namedtuple
+entry_tuple = namedtuple('entry', ['hash', 'path', 'size'], defaults=[None])
+
+def read_manifest(manifest_path):
+    import os.path
+    if not(manifest_path and os.path.exists(manifest_path)):
+        return None
+
+    manifest = None
+    print(f"Reading manifest from {manifest_path}")
+    manifest = []
+    with open(manifest_path, 'r', encoding='cp437') as f:
+        linenum = 1
+        try:
+            for line in f:
+                entry = entry_tuple(hash=line[:40], path=line[41:].rstrip())
+                manifest.append(entry)
+                linenum += 1
+        except Exception as e:
+            print(f"Error in line {linenum}: {line}")
+            raise e
+
+    print(f"Manifest has {len(manifest)} entries")
+    return manifest
+
+manifest_version = 1
+def write_manifest(manifest, manifest_path):
+    with open(manifest_path, 'w', encoding='utf-8') as f:
+        print(f"version {manifest_version}", file=f)
+        for entry in manifest:
+            print(f"{entry.hash} {entry.size} {entry.path}")
+```
+
+Of course, when we test this, we're going to make a copy of our expensively-gotten original
+manifest, so we don't accidentally wipe it out with a bug.
+
+Now, for scan, we need to read the existing manifest and then use values from it when
+we do our new scan; for this initial repair, we are going to get the sizes of files.
+Going forward, doing a scan will remove files that no longer exist, and calculate hashes
+for files that have changed (size or mod date being a clue that it changed).
+
+```
+    if args.scan:
+        scan_paths(args.paths, args.manifest)
+```
+
+## Showing status for long-running operations
+
+One common technique in command-line apps is to write a progress line of some sort
+to stderr, without advancing it. This can be done by printing \r (\x0D, CR) to return
+the cursor to the beginning of the line, then printing a string that's less than
+the terminal width and at least as long as the previous line that was printed.
+
+In Python, we can get the size of the current terminal with an `os` library function
+
+```
+import os
+term_size = os.get_terminal_size()
+print(f"line length = {term_size.columns}")
+```
+
+At least on Windows, and with the old cmd.exe terminal, there is no moving the cursor
+around on the screen, so the most you can do with status is re-use the current line
+of output over and over again.
+
+Let's make a progress function
+
+```
+def console_status(msg):
+    max_col = term_size.columns - 1
+
+    # shorten long line
+    if len(str) > max_col:
+        half = max_col/2 - 3
+        str = str[0:half] + "..." + str[-half:]
+
+    # print to erase and position cursor at end of indicated string
+    pad = " " * (max_col - len(str))
+    sys.stderr.write("\r" + str + pad)
+    sys.stderr.write("\r" + str) # so cursor is a natural place
+```
+
+There are probably better ways to do this, but this won't flicker. And then the
+progress function just generates an appropriate progress string and calls the console_status
+function every once in a while
+
+```
+last_elapsed = 0.0
+
+def progress(num_files, path):
+    now = time.time()
+    if now - last_elapsed < 0.1:
+        return
+    msg = f"T: {elapsed_time:.2f} sec Files: {num_files} {path}"
+    console_status(msg)
+    last_elapsed = now
+```
+
+and then this prints progress every once in a while so we know what's going on.
+
+## Strange file names
+
+Above, I mentioned that dealing with operating system file paths can be touchy. There's
+no single standard. And if you want to deal with every possible file path, you can't
+roundtrip paths into a different encoding.
+
+After showing progress, I found out that there are files with very strange paths.
+In this case, they are apparently Chinese file names, and this broke the simple
+progress code I'd written - a single Unicode character can be quite wide, and when
+echoed to a terminal that can only handle cp437, too long to fit in the given space.
+These wrapped lines, which is why I noticed them
+
+```
+T: 425.51 sec Files: 2612937 D:\projects\unrealwiki\WikiPag...adong\fucking-algorithm\blob\master\动态规划系列\动态规划之正则
+T: 425.51 sec Files: 2612937 D:\projects\unrealwiki\WikiPag...adong\fucking-algorithm\blob\master\动态规划系列\动态规划之正则
+T: 425.61 sec Files: 2612937 D:\projects\unrealwiki\WikiPag...abuladong\fucking-algorithm\blob\master\数据结构系列\实现计算器
+T: 425.61 sec Files: 2612937 D:\projects\unrealwiki\WikiPag...abuladong\fucking-algorithm\blob\master\数据结构系列\实现计算器
+T: 425.71 sec Files: 2612937 D:\projects\unrealwiki\WikiPag...buladong\fucking-algorithm\blob\master\算法思维系列\算法学习之 
+T: 425.71 sec Files: 2612937 D:\projects\unrealwiki\WikiPag...buladong\fucking-algorithm\blob\master\算法思维系列\算法学习之 
+```
+
+This may be tough to fix. NTFS paths are stored in Unicode (specifically, UTF-16 LE, which
+is the old name for UCS-2 LE). I think modern Python now uses the wide functions to access
+the file system; if not, I wouldn't see Chinese characters above. When printed to the console,
+the Chinese characters are shown as boxes, and I think it's one box per byte that can't be
+represented, not one box per character. At least, these are being truncated to the proper number
+of characters, and so if it's wrapping, that must be printing off the end of the terminal.
+
+## try/except and ctrl-c
+
+If you use try/except to ignore exceptions, you'll also be ignoring the exception injected
+by ctrl-C. Python follows the Unix model and raises a KeyboardInterrupt exception when ctrl-C
+is pressed. If you have a catch-all try/except that is not actually halting on exception, then
+you will swallow this up.
+
+A better approach is to specifically catch the exceptions you want to handle or ignore.
+
+Or, use ctrl-break, as that cannot be ignored, and will always terminate the Python process.
+
+## os.walk and file system speed
+
+It only took 248 seconds to have os.walk iterate through four file systems of a cumulative
+4 million files. But calling os.getfilesize on each file is taking considerably longer.
+It took 688 seconds to walk roughly the same filesystem and get file sizes. That's still
+not horrible, but it's starting to get into "meaningful amounts of time".
+
+At this point, we now have a v1 manifest, with hashes and file sizes. It's also showing the
+limits of using a text-based file format, since it takes a significant amount of time to
+read this manifest. Everything is stored as text, so it's 658 MB in size. It would be less
+than half that size if we stored hashes and sizes as binary, and even smaller if we stored
+paths as directory+leaf instead of as full paths.
