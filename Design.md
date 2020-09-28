@@ -494,3 +494,66 @@ limits of using a text-based file format, since it takes a significant amount of
 read this manifest. Everything is stored as text, so it's 658 MB in size. It would be less
 than half that size if we stored hashes and sizes as binary, and even smaller if we stored
 paths as directory+leaf instead of as full paths.
+
+## Cleaning up the mess
+
+Small programs can be written quickly and don't need much structure. At the 10-line mark, it's
+just a complicated command. At the 50-line mark, it's getting bigger but still very easy
+to keep in mind. At the 100-line mark, it starts to get a little messy, and by the 200-line
+mark, care needs to be exerted.
+
+We are now at the point where we will probably double the lines of code without adding much
+functionality, but we need to make it possible for the code to get more complex without being
+so fragile that it breaks all the time, or so intertwined that full understanding is hard.
+This revolves around several aspects:
+
+- passing state around
+- handling errors
+
+The size of any individual file isn't all that important. You can have 6000 line files that are
+still very understandable and easy to work with. In fact, problems happen when you split code
+into multiple files just because you think they are too big. Individual files should be individual
+bits of functionality, and none of our functionality is so complex that it needs to be in separate
+files yet. Another reason to put code into individual files is to share it, but we haven't produced
+anything worth sharing yet.
+
+First, we need to get rid of as many globals as possible. It's not that globals are forbidden or
+bad, but that globals allow for sharing in a way that we can't control or manage. Anything can get
+at a global.
+
+Second, we should only cache things that need caching. The terminal width, for example, can
+change during a run, so we should get it each time we want to print. There will be artifacts
+because the Windows console doesn't preserve text as lines that can reflow, but as lines
+written permanently to the console with breaks in them.
+
+Python is one of the languages where importing modules is cheap, and so we should do it as close
+to the point of use as possible.
+
+Follow existing conventions instead of inventing your own, unless you have a truly gigantic project.
+
+Use linters and other style enforcement tools. For Python, we'll use Flake8, since it bundles
+together a number of style tools. That said, these tools can be touchy to use, especially on
+existing code for the first time. The clang-tidy tool is unusual in that it uses the full
+Clang parser, but many other tools use custom parsers that, although they will find errors,
+may not report them properly.
+
+For an example of a linter going awry, this line
+
+```
+print(f"read_manifest: {len(manifest)} entries, elapsed time={elapsed_time%.3f}")
+```
+
+does have an error in it that a linter should catch (the inner format item should have been `elapsed_time:.3f`).
+But in this case, the error was erroneously reported as being in the first line of code
+
+```
+C:\projects\github\neurocline\manifest>flake8 new-manifest.py
+new-manifest.py:1:17: E999 SyntaxError: invalid syntax
+```
+
+This sort of thing is rare, but does happen, and requires something like a binary search to figure
+it out.
+
+It's especialy important to run linters and checkers on dynamic languages like Python, because many errors
+will not be noticed until runtime. Even in this simple program, I found multiple errors once I ran Flake8
+on the code.
