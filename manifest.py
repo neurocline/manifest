@@ -18,16 +18,43 @@ def main():
     parser.add_argument('--find-dups', action='store_true', help='find files with the same hash')
     parser.add_argument('--scan', action='store_true', help='compute hashes for the given paths')
     parser.add_argument('--report', help='path to write report to')
+    parser.add_argument('--verbose', '-v', help='verbose output')
     args = parser.parse_args()
     print(f"paths: {args.paths}")
 
+    scanner = Scanner(args=args)
+
     if args.scan:
-        scan_paths(args.paths, args.manifest)
+        scanner.scan_paths(paths=args.paths, manifest_path=args.manifest)
+        # scan_paths(args.paths, args.manifest)
     if args.find_dups:
-        find_dups(args.manifest, args.report)
+        # find_dups(args.manifest, args.report)
+        scanner.find_dups(manifest_path=args.manifest, report_path=args.report)
 
 
-def scan_paths(paths, manifest_path):
+class Scanner(object):
+    def __init__(self, args):
+        self.manifest = Manifest()
+        self.args = args
+
+    def scan_paths(self, paths=None, manifest_path=None):
+        scan_paths(paths, manifest_path, self.args.verbose)
+
+    def find_dups(self, manifest_path=None, report_path=None):
+        find_dups(manifest_path, report_path)
+
+
+class Manifest(object):
+    def __init__(self):
+        pass
+
+
+class Status(object):
+    def __init__(self):
+        pass
+
+
+def scan_paths(paths, manifest_path, verbose):
     import time
     start_time = time.time()
 
@@ -43,7 +70,7 @@ def scan_paths(paths, manifest_path):
     # Build up a full manifest
     manifest = []
     for path in paths:
-        walk(path, path_hashes, manifest)
+        walk(path, path_hashes, manifest, verbose)
     end_time = time.time()
     delta_secs = end_time - start_time
 
@@ -53,7 +80,7 @@ def scan_paths(paths, manifest_path):
     print(f"Elapsed time: {delta_secs:.3f} seconds")
 
 
-def walk(base_path, path_hashes, manifest):
+def walk(base_path, path_hashes, manifest, verbose):
     import os
     sized_files = 0
     hashed_files = 0
@@ -64,12 +91,18 @@ def walk(base_path, path_hashes, manifest):
             if item_path in path_hashes:
                 item_hash = path_hashes[item_path]
             else:
+                if verbose:
+                    console_status("")
+                    print(f"Not found: {item_path}")
                 item_hash = get_hash(item_path)
                 hashed_files += 1
             try:
                 item_size = os.path.getsize(item_path)
                 sized_files += 1
             except Exception:
+                if verbose:
+                    console_status("")
+                    print(f"Failed to get size: {item_path}")
                 item_size = None
             entry = entry_tuple(hash=item_hash, path=item_path, size=item_size)
             manifest.append(entry)
@@ -84,10 +117,12 @@ def get_hash(file_path):
     null_digest = "0" * 40
     sha1 = hashlib.sha1()
     try:
+        read_bytes = 0
         with open(file_path, 'rb') as f:
             for data in iter(lambda: f.read(blocksize), b''):
                 sha1.update(data)
-                progress(path=file_path)
+                read_bytes += len(data)
+                hash_progress(path=file_path, read_bytes=read_bytes)
         # print(f"{sha1.hexdigest()} {file_path}")
         return sha1.hexdigest()
     except Exception:
@@ -106,10 +141,15 @@ def find_dups(manifest_path, report_path):
     # turn it into a map of hashes to paths
     hashes = dict()
     for entry in manifest:
-        hash, path = entry[0], entry[1]
-        if hash not in hashes:
-            hashes[hash] = []
-        hashes[hash].append(path)
+        # hash, path = entry[0], entry[1]
+        if entry.hash not in hashes:
+            hashes[entry.hash] = []
+        hashes[entry.hash].append(entry.path)
+
+    # and create a map of hashes to sizes (each hash can only be one size)
+    sizes = dict()
+    for entry in manifest:
+        sizes[entry.hash] = entry.size
 
     # show hashes with multiple paths
     import sys
@@ -123,7 +163,9 @@ def find_dups(manifest_path, report_path):
         '0000000000000000000000000000000000000000'
     ]
 
-    sorted_hashes = sorted(list(hashes), key=lambda e: len(hashes[e]), reverse=True)
+    # sorted_hashes = sorted(list(hashes), key=lambda e: len(hashes[e]), reverse=True)
+    extra = 0
+    sorted_hashes = sorted(list(sizes), key=lambda e: sizes[e], reverse=True)
     for hash in sorted_hashes:
         paths = hashes[hash]
         if len(paths) < 2:
@@ -131,10 +173,15 @@ def find_dups(manifest_path, report_path):
         if hash in ignore_hashes:
             continue
         num_dups += 1
-        print(f"{hash}: {len(paths)} duplicates", file=report_out)
+        extra += sizes[hash] * (len(paths) - 1)
+        extra_GB = int(0.5 + extra / 1000000000)
+        print(
+            f"{hash}: size={sizes[hash]}, {len(paths)} duplicates (total extra={extra_GB} GB)",
+            file=report_out)
         for path in paths:
             print(f"    {path}", file=report_out)
             dup_files += 1
+        progress(num_files=len(manifest), hashed_files=len(hashes), sized_files=dup_files)
     print(f"{len(hashes)} unique files out of {len(manifest)} total files", file=report_out)
     print(
         f"{num_dups} duplicated hashes found, {dup_files} duplicated files found",
@@ -157,6 +204,23 @@ def read_manifest(manifest_path):
     console_status("")
     print(f"Reading manifest from {manifest_path}")
     manifest = []
+    with open(manifest_path, 'r', encoding='utf-8') as f:
+        # Get the first line, which is our version. It's either in utf-8 and
+        # is of the form "version <int>", or it's not and that means version 0
+        version_line = f.readline().rstrip()
+
+    if version_line == "version 1":
+        read_manifest_v1(manifest, manifest_path)
+    else:
+        read_manifest_v0(manifest, manifest_path)
+
+    elapsed_time = time.time() - start_time
+    print(f"read_manifest: {len(manifest)} entries, elapsed time={elapsed_time:.3f}")
+    return manifest
+
+
+def read_manifest_v0(manifest, manifest_path, initial_line=None):
+    print("Assuming version 0 manifest")
     with open(manifest_path, 'r', encoding='cp437') as f:
         linenum = 1
         try:
@@ -167,9 +231,34 @@ def read_manifest(manifest_path):
         except Exception as e:
             print(f"Error in line {linenum}: {line}")
             raise e
+    return manifest
 
-    elapsed_time = time.time() - start_time
-    print(f"read_manifest: {len(manifest)} entries, elapsed time={elapsed_time:.3f}")
+
+def read_manifest_v1(manifest, manifest_path):
+    print("Got version 1 manifest")
+    with open(manifest_path, 'r', encoding='utf-8') as f:
+        f.readline()  # skip past the already-read version line
+        linenum = 2
+        try:
+            for line in f:
+                filehash = line[:40]
+                sizepath = line[41:].rstrip()
+                i = sizepath.find(" ")
+                if i == -1:
+                    raise RuntimeError(f"No size/path?")
+                filesize = None
+                if sizepath[:i] != "None":
+                    filesize = int(sizepath[:i])
+                filepath = sizepath[i+1:]
+                entry = entry_tuple(hash=filehash, path=filepath, size=filesize)
+                manifest.append(entry)
+                # print(f"Added hash={filehash} path={filepath} size={filesize}")
+                linenum += 1
+                progress(num_files=len(manifest))
+        except Exception as e:
+            print(f"Error in line {linenum}: {line}")
+            raise e
+        console_status("")
     return manifest
 
 
@@ -177,14 +266,13 @@ def write_manifest(manifest, manifest_path):
     # The current manifest version
     manifest_version = 1
 
-    import os.path
     import time
     start_time = time.time()
-    if manifest_path is None or not os.path.exists(manifest_path):
+    if manifest_path is None:
         return
 
     console_status("")
-    print(f"Writing manifest to {manifest_path}")
+    print(f"Writing version {manifest_version} manifest to {manifest_path}")
     with open(manifest_path, 'w', encoding='utf-8') as f:
         print(f"version {manifest_version}", file=f)
         for entry in manifest:
@@ -231,10 +319,30 @@ def progress(num_files=None, hashed_files=None, sized_files=None, path=None):
     last_progress_time = now
 
 
+def hash_progress(path=None, read_bytes=None):
+    import time
+    global last_progress_time
+    now = time.time()
+    if now - last_progress_time < 0.1:
+        return
+    elapsed_time = now - start_time
+    read_MB = int(0.5 + read_bytes / 1000000)
+    msg = f"T+{elapsed_time:.1f} Hashed={read_MB}MB {path}"
+    console_status(msg)
+    last_progress_time = now
+
+
 def console_status(msg):
     """Writes a full non-advancing line to the console"""
     import os
-    term_size = os.get_terminal_size()
+
+    # So, this has a problem. We can only get the size of a file descriptor connected to a
+    # terminal. On the one hand, this is fine, because we are going to write to sys.stderr.
+    # But this is awkward, because even sys.stderr could have been redirected on us. Of course,
+    # in that case, we shouldn't try to write progress. There is a function that can tell if a
+    # file descriptor is connected to a terminal, e.g. here sys.stderr.isatty().
+    STDERR_FILENO = 2
+    term_size = os.get_terminal_size(STDERR_FILENO)  # the fd for sys.stderr
 
     max_col = term_size.columns - 1
 

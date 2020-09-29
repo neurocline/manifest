@@ -557,3 +557,20 @@ it out.
 It's especialy important to run linters and checkers on dynamic languages like Python, because many errors
 will not be noticed until runtime. Even in this simple program, I found multiple errors once I ran Flake8
 on the code.
+
+## More on path names
+
+Even with reading and writing the manifest as UTF-8, we are failing to find files with unusual characters
+in them. It's not just Chinese characters, it's other non-ASCII characters like `…` or `é` or `—` (which
+is an em-dash). The paths are in the manifest and they match files on disk, unless the paths in the file
+are really still in cp437?
+
+And it turns out that the new manifest-reading code was still reading the entire file in cp437, even though
+it was supposed to be reading it in utf-8. This is where we need unit tests to catch mistakes like this.
+But on the other hand, once this is fixed, the unit test is rather pointless, because only if the manifest
+reading/writing code is touched will we have the possibility of such an error.
+
+## Adding some classes
+
+One natural way to structure Python code and pass state around is to put code into classes, create objects,
+and then methods have access to the object state.
