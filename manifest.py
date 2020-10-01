@@ -16,9 +16,11 @@ def main():
     parser.add_argument('paths', nargs='*', help='paths to scan')
     parser.add_argument('--manifest', '-m', help='manifest file to use')
     parser.add_argument('--find-dups', action='store_true', help='find files with the same hash')
+    parser.add_argument('--max-size', type=int, default=0, help='max file size to report on')
+    parser.add_argument('--show-all', action='store_true', help='show all files, not just dups')
     parser.add_argument('--scan', action='store_true', help='compute hashes for the given paths')
     parser.add_argument('--report', help='path to write report to')
-    parser.add_argument('--verbose', '-v', help='verbose output')
+    parser.add_argument('--verbose', '-v', action='store_true', help='verbose output')
     args = parser.parse_args()
     print(f"paths: {args.paths}")
 
@@ -26,10 +28,10 @@ def main():
 
     if args.scan:
         scanner.scan_paths(paths=args.paths, manifest_path=args.manifest)
-        # scan_paths(args.paths, args.manifest)
     if args.find_dups:
-        # find_dups(args.manifest, args.report)
-        scanner.find_dups(manifest_path=args.manifest, report_path=args.report)
+        scanner.find_dups(
+                manifest_path=args.manifest, report_path=args.report,
+                max_size=args.max_size, show_all=args.show_all)
 
 
 class Scanner(object):
@@ -40,8 +42,8 @@ class Scanner(object):
     def scan_paths(self, paths=None, manifest_path=None):
         scan_paths(paths, manifest_path, self.args.verbose)
 
-    def find_dups(self, manifest_path=None, report_path=None):
-        find_dups(manifest_path, report_path)
+    def find_dups(self, manifest_path=None, report_path=None, max_size=0, show_all=False):
+        find_dups(manifest_path, report_path, max_size, show_all)
 
 
 class Manifest(object):
@@ -130,7 +132,7 @@ def get_hash(file_path):
         return null_digest
 
 
-def find_dups(manifest_path, report_path):
+def find_dups(manifest_path, report_path, max_size, show_all):
     # get existing manifest
     manifest = read_manifest(manifest_path)
 
@@ -168,15 +170,18 @@ def find_dups(manifest_path, report_path):
     sorted_hashes = sorted(list(sizes), key=lambda e: sizes[e], reverse=True)
     for hash in sorted_hashes:
         paths = hashes[hash]
-        if len(paths) < 2:
+        if show_all is False and len(paths) < 2:
             continue
         if hash in ignore_hashes:
+            continue
+        if sizes[hash] < max_size:
             continue
         num_dups += 1
         extra += sizes[hash] * (len(paths) - 1)
         extra_GB = int(0.5 + extra / 1000000000)
+        dups_text = f"{len(paths)} copies" if len(paths) >= 2 else ""
         print(
-            f"{hash}: size={sizes[hash]}, {len(paths)} duplicates (total extra={extra_GB} GB)",
+            f"{hash}: size={sizes[hash]}, {dups_text} (total extra={extra_GB} GB)",
             file=report_out)
         for path in paths:
             print(f"    {path}", file=report_out)
