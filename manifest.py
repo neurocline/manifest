@@ -66,7 +66,8 @@ def scan_paths(paths, manifest_path, verbose):
     path_hashes = dict()
     if manifest is not None:
         for entry in manifest:
-            path_hashes[entry.path] = entry.hash
+            # path_hashes[entry.path] = entry.hash
+            path_hashes[entry.path] = entry
     print(f"Got {len(path_hashes)} existing hashes from manifest")
 
     # Build up a full manifest
@@ -88,24 +89,38 @@ def walk(base_path, path_hashes, manifest, verbose):
     hashed_files = 0
     for root, _, files in os.walk(base_path):
         for f in files:
+
+            # Get existing entry (if there is one). We will discard the old entry
+            # if we think it's no longer valid (e.g. file metadata changed)
             item_path = os.path.join(root, f)
-            item_hash = None
+            old_entry = None
             if item_path in path_hashes:
-                item_hash = path_hashes[item_path]
-            else:
-                if verbose:
-                    console_status("")
-                    print(f"Not found: {item_path}")
-                item_hash = get_hash(item_path)
-                hashed_files += 1
+                old_entry = path_hashes[item_path]
+
+            # get file metadata (for now, just size)
             try:
                 item_size = os.path.getsize(item_path)
+                if old_entry is not None and item_size != old_entry.size:
+                    old_entry = None
                 sized_files += 1
             except Exception:
                 if verbose:
                     console_status("")
                     print(f"Failed to get size: {item_path}")
                 item_size = None
+                old_entry = None
+
+            # update file hash if we don't have an existing one
+            item_hash = None
+            if old_entry is not None:
+                item_hash = old_entry.hash
+            if item_hash is None:
+                if verbose:
+                    console_status("")
+                    print(f"Getting hash for: {item_path}")
+                item_hash = get_hash(item_path)
+                hashed_files += 1
+
             entry = entry_tuple(hash=item_hash, path=item_path, size=item_size)
             manifest.append(entry)
             progress(
