@@ -574,3 +574,18 @@ reading/writing code is touched will we have the possibility of such an error.
 
 One natural way to structure Python code and pass state around is to put code into classes, create objects,
 and then methods have access to the object state.
+
+## Rewrite
+
+One best practice when doing something is this - do the first version, then throw it away and write
+the real version. This either sounds appealing or crazy; it's both, but it really depends on how
+you approach it. There are adjacent concepts like "prototyping" or "spike" or "iteration"; I'm
+not talking about those. You make your best stab at a version, you use it, and then you just
+start over, but you already have all that learning, so the second version goes much faster
+and turns out better. This is hard if you've written tens of thousands of lines of code, and
+invisible if it's tens of lines of code. The sweet spot is more about the hundreds to thousands
+of lines of code.
+
+So, now that we have done some of the code, what does the real version of this look like?
+This is especially true because the current version falls afoul of Python's single-threaded
+nature, and it's not all that incremental either.
